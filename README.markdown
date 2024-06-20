@@ -6,27 +6,34 @@
 
 ## Usage
 
+#### Start server
 ```common-lisp
 (defvar *app* (make-instance 'ningle:app))
 
+(clack:clackup *app*)
+;; This should start clack server on http://127.0.0.1:5000
+```
+#### Most simple route
+```common-lisp
 (setf (ningle:route *app* "/")
       "Welcome to ningle!")
-
+;; http://127.0.0.1:5000/
+```
+#### Parameters values
+```common-lisp
 (setf (ningle:route *app* "/login" :method :POST)
       #'(lambda (params)
           (if (authorize (cdr (assoc "username" params :test #'string=))
                          (cdr (assoc "password" params :test #'string=)))
               "Authorized!"
               "Failed...Try again.")))
-
-(clack:clackup *app*)
 ```
-
 Now you can access to http://localhost:5000/ and then ningle should show you "Welcome to ningle!".
 
 ## Installation
-
-    (ql:quickload :ningle)
+```common-lisp
+(ql:quickload :ningle)
+```
 
 ## Description
 
@@ -35,6 +42,69 @@ ningle is a fork project of [Caveman](http://fukamachi.github.com/caveman/). nin
 As this is a thin framework, you need to have subtle knowledge about [Clack](http://clacklisp.org). It is a server interface ningle bases on.
 
 ## Getting started
+
+#### Request information
+```common-lisp
+(setf (ningle:route *app* "/request-information" :method :GET)
+      #'(lambda (params)
+	  (declare (ignore params))
+	  (with-output-to-string (s)
+	    (let ((*print-case* :downcase))
+	      (format s "REQUEST-DATA: ~s" ningle:*request*)))))
+```
+This prints all request information.
+
+#### Response information
+```common-lisp
+(setf (ningle:route *app* "/response-information" :method :GET)
+      #'(lambda (params)
+	  (declare (ignore params))
+	  (with-output-to-string (s)
+	    (let ((*print-case* :downcase))
+	      (format s " RESPONSE-DATA: ~s" ningle:*response*)))))
+```
+#### Lack normal response
+```common-lisp
+(setf (ningle:route *app* "/lack-normal-response" :method :GET)
+      #'(lambda (params)
+	  (declare (ignore params))
+	  (list 201
+	        (list :content-language "de-DE")
+	        (list "Das ist eine normale Nachricht"))))
+```
+See [Lack normal response](https://github.com/fukamachi/lack?tab=readme-ov-file#normal-response.
+#### Usage of `*response*`
+```common-lisp
+(setf (ningle:route *app* "/ningle-response" :method :GET)
+      #'(lambda (params)
+          (declare (ignore params))
+          (setf (lack.response:response-headers ningle:*response*)
+                (append (lack.response:response-headers ningle:*response*)
+                        (list :content-type "application/json"
+			      :)))
+          (setf (lack.response:response-body ningle:*response*)
+                "[{\"test-response\":true}]")
+          nil)) 
+```
+;; http://127.0.0.1:5000/ningle-response
+;; supply content-type and content via ningle:*response*
+;; details in response section
+
+#### Hybrid response
+```common-lisp
+(setf (ningle:route *app* "/hybrid-response" :method :GET)
+      #'(lambda (params)
+          (declare (ignore params))
+          (setf (lack.response:response-headers ningle:*response*)
+                (append (lack.response:response-headers ningle:*response*)
+                        (list :content-type "application/json")))
+          (setf (lack.response:response-body ningle:*response*)
+                "[{\"test-response\":false}]")
+          "[{\"test-response\":true}]"))
+```
+;; Set response header in ningle:*response*
+;; set output with returned value from route.
+;; result value supersedes value set via response-headers
 
 ### Routing
 
@@ -125,12 +195,39 @@ You can easily define your own conditions:
           "Sorry, you lost."))
 ```
 
-### Request & Response
+### Request
 
-ningle provides two special variables named `*request*` and `*response*`. They will be bound to an instance [Lack.Request](https://github.com/fukamachi/lack/blob/master/src/request.lisp#L33) and [Lack.Response](https://github.com/fukamachi/lack/blob/master/src/response.lisp#L19) for each request.
+`ningle` provides a special variable [`*request*`](https://github.com/fukamachi/ningle/blob/master/context.lisp#L19) which will be bound to an instance of [`lack.request:request`](https://github.com/fukamachi/lack/blob/master/src/request.lisp#L45) for each request. Mostly you will need to read values from this structure. Take a look at the structure definition to see where to access which information.
 
-For example, by using them, you can change the response status code, Content-Type or something like that in each controllers.
+Here some usage examples
+```common-lisp
+;; read body-parameters
+(lack.request:request-body-parameters *request*)
+;; => #<CIRCULAR-INPUT-STREAM {1009BC8933}>
+```
+```common-lisp
+(lack.request:request-cookies *request*)
+;; => ((session 388934395))
+```
 
+### Response
+
+`ningle` provides a special variable [`*response*`](https://github.com/fukamachi/ningle/blob/master/context.lisp#L23) which will be bound to an instance of [`lack.response:response`](https://github.com/fukamachi/lack/blob/master/src/response.lisp#L19) for each request. The status-code is [200 by default](https://github.com/fukamachi/ningle/blob/master/context.lisp#L35). If you manipulate `*response*`, make sure to NOT return a cons in your route. Take a look at the structure definition to see where to put which information.
+
+Processing of route return value depending on type:
+
+- CONS
+  - result will be used as [normal lack response](https://github.com/fukamachi/lack?tab=readme-ov-file#normal-response)
+  - manipulations to `*response*` will be silently ignored and not be reflected in the sent http-response!
+
+- NULL
+  - `*response*` will be finalized with `lack.response:finalize-response`
+
+- OTHERWISE (neither cons, nor null)
+  - result will be set as value for `response-body` slot in `*response*`
+  - `*response*` will be finalized with `lack.response:finalize-response`
+
+You can for example set some headers
 ```common-lisp
 (setf (lack.response:response-headers *response*)
       (append (lack.response:response-headers *response*)
@@ -142,6 +239,19 @@ For example, by using them, you can change the response status code, Content-Typ
 
 (setf (lack.response:response-status *response*) 201)
 ```
+Then you can set the json string either via `lack.response:response-body`
+```common-lisp
+(setf (lack.response:response-body *response*)
+      "[{\"test-response\":true}]")
+```
+
+or by suppling the json as result of the route
+
+```common-lisp
+"[{\"test-response\":true}]"
+```
+Note: the value supplied as result of the route will replace the value set
+via setf'ing the lack.response:response-body.
 
 ### Context
 
